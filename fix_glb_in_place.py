@@ -7,8 +7,30 @@ import tempfile
 TARGET_DIR = r"C:\Users\veizou\vei-z\public\content\genshin\npc2"
 # ---------------------
 
-def fix_materials_with_diffuse(search_folder):
-    """Finds _Diffuse textures (ignoring _Diffuse_A and _Lightmap) and links them to materials."""
+def get_best_diffuse_match(mat_name, diffuse_textures):
+    """Scores each _Diffuse texture against the material name to find the exact part match."""
+    # Safely grab the base material name without '.001' using partition
+    base_mat, _, _ = mat_name.lower().partition(".")
+    
+    ignore_words = {"mi", "m", "mat", "material", "avatar", "npc", "tex", "diffuse", "instance"}
+    mat_tokens = [w for w in base_mat.replace("-", "_").split("_") if w not in ignore_words and len(w) > 1]
+
+    best_path = None
+    best_score = -1
+
+    for tex_name, tex_path in diffuse_textures.items():
+        score = 0
+        for token in mat_tokens:
+            if token in tex_name:
+                score += len(token)
+        if score > best_score:
+            best_score = score
+            best_path = tex_path
+
+    return best_path
+
+def fix_materials_and_uvs(search_folder):
+    """Finds _Diffuse textures, matches them by part name, and enforces primary UV0."""
     diffuse_textures = {}
     for root, dirs, files in os.walk(search_folder):
         for file in files:
@@ -20,6 +42,12 @@ def fix_materials_with_diffuse(search_folder):
     if not diffuse_textures:
         return
 
+    # 1. Ensure primary UV channel (index 0) is active on all meshes
+    for obj in bpy.data.objects:
+        if obj.type == 'MESH' and obj.data.uv_layers:
+            obj.data.uv_layers.active_index = 0
+
+    # 2. Rebuild each material with its matched Diffuse texture
     for mat in bpy.data.materials:
         if not mat.use_nodes:
             mat.use_nodes = True
@@ -35,20 +63,7 @@ def fix_materials_with_diffuse(search_folder):
         if 'Roughness' in bsdf.inputs:
             bsdf.inputs['Roughness'].default_value = 0.85
 
-        clean_mat_name = mat.name.lower().split(".")[0]
-        matched_tex_path = None
-
-        for part in reversed(clean_mat_name.split("_")):
-            if len(part) > 2:
-                for tex_name, tex_path in diffuse_textures.items():
-                    if part in tex_name:
-                        matched_tex_path = tex_path
-                        break
-            if matched_tex_path:
-                break
-
-        if not matched_tex_path:
-            matched_tex_path = list(diffuse_textures.values())[0]
+        matched_tex_path = get_best_diffuse_match(mat.name, diffuse_textures)
 
         if matched_tex_path:
             tex_node = nodes.new(type='ShaderNodeTexImage')
@@ -63,22 +78,22 @@ def convert_fbx_list(fbx_files, search_folder, out_folder, folder_name):
 
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.import_scene.fbx(filepath=fbx_path)
-        fix_materials_with_diffuse(search_folder)
+        fix_materials_and_uvs(search_folder)
         bpy.ops.export_scene.gltf(filepath=glb_path, export_format='GLB')
 
 def process_in_place():
-    # Walks through every subfolder inside TARGET_DIR regardless of depth
     for root, dirs, files in os.walk(TARGET_DIR):
         folder_name = os.path.basename(root)
 
         fbx_files = [os.path.join(root, f) for f in sorted(files) if f.lower().endswith(".fbx")]
-        zip_files = [f for f in files if f.lower().endswith(".zip")]
+        zip_files = [f for f in sorted(files) if f.lower().endswith(".zip")]
 
         if fbx_files:
             convert_fbx_list(fbx_files, root, root, folder_name)
-            print(f"Updated in place (from loose files): {folder_name}")
+            print(f"Updated (from loose files): {folder_name}")
         elif zip_files:
-            zip_path = os.path.join(root, zip_files[0])
+            first_zip = next(iter(zip_files))
+            zip_path = os.path.join(root, first_zip)
             with tempfile.TemporaryDirectory() as temp_dir:
                 with zipfile.ZipFile(zip_path, 'r') as zipf:
                     zipf.extractall(temp_dir)
@@ -91,7 +106,7 @@ def process_in_place():
 
                 if zip_fbx:
                     convert_fbx_list(zip_fbx, temp_dir, root, folder_name)
-                    print(f"Updated in place (from ZIP): {folder_name}")
+                    print(f"Updated (from ZIP): {folder_name}")
 
 if __name__ == "__main__":
     process_in_place()
