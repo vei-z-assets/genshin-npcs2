@@ -4,7 +4,7 @@ import zipfile
 import tempfile
 
 # --- CONFIGURATION ---
-TARGET_DIR = r"C:\Users\veizou\vei-z\public\content\genshin\npc"
+TARGET_DIR = r"C:\Users\veizou\vei-z\public\content\genshin\npc2"
 # ---------------------
 
 def fix_materials_with_diffuse(search_folder):
